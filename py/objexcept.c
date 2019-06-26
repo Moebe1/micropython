@@ -4,6 +4,7 @@
  * The MIT License (MIT)
  *
  * Copyright (c) 2013, 2014 Damien P. George
+ * Copyright (c) 2014-2016 Paul Sokolovsky
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -348,9 +349,9 @@ mp_obj_t mp_obj_new_exception_msg(const mp_obj_type_t *exc_type, const char *msg
 
     // Create the string object and call mp_obj_exception_make_new to create the exception
     o_str->base.type = &mp_type_str;
-    o_str->hash = qstr_compute_hash(o_str->data, o_str->len);
     o_str->len = strlen(msg);
     o_str->data = (const byte*)msg;
+    o_str->hash = qstr_compute_hash(o_str->data, o_str->len);
     mp_obj_t arg = MP_OBJ_FROM_PTR(o_str);
     return mp_obj_exception_make_new(exc_type, 1, 0, &arg);
 }

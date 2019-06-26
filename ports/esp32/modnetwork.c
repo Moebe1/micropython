@@ -46,7 +46,6 @@
 #include "esp_wifi_types.h"
 #include "esp_log.h"
 #include "esp_event_loop.h"
-#include "esp_log.h"
 #include "lwip/dns.h"
 #include "tcpip_adapter.h"
 
@@ -160,8 +159,8 @@ static esp_err_t event_handler(void *ctx, system_event_t *event) {
                 message = "\nno AP found";
                 break;
             case WIFI_REASON_AUTH_FAIL:
+                // Password may be wrong, or it just failed to connect; try to reconnect.
                 message = "\nauthentication failed";
-                wifi_sta_connect_requested = false;
                 break;
             default:
                 // Let other errors through and try to reconnect.
@@ -313,7 +312,7 @@ STATIC mp_obj_t esp_connect(size_t n_args, const mp_obj_t *pos_args, mp_map_t *k
 
     // configure any parameters that are given
     if (n_args > 1) {
-        mp_uint_t len;
+        size_t len;
         const char *p;
         if (args[ARG_ssid].u_obj != mp_const_none) {
             p = mp_obj_str_get_data(args[ARG_ssid].u_obj, &len);
@@ -398,7 +397,14 @@ STATIC mp_obj_t esp_status(size_t n_args, const mp_obj_t *args) {
             }
             return list;
         }
+        case (uintptr_t)MP_OBJ_NEW_QSTR(MP_QSTR_rssi): {
+            // return signal of AP, only in STA mode
+            require_if(args[0], WIFI_IF_STA);
 
+            wifi_ap_record_t info;
+            ESP_EXCEPTIONS(esp_wifi_sta_get_ap_info(&info));
+            return MP_OBJ_NEW_SMALL_INT(info.rssi);
+        }
         default:
             mp_raise_ValueError("unknown status param");
     }
@@ -547,7 +553,7 @@ STATIC mp_obj_t esp_config(size_t n_args, const mp_obj_t *args, mp_map_t *kwargs
                     }
                     case QS(MP_QSTR_essid): {
                         req_if = WIFI_IF_AP;
-                        mp_uint_t len;
+                        size_t len;
                         const char *s = mp_obj_str_get_data(kwargs->table[i].value, &len);
                         len = MIN(len, sizeof(cfg.ap.ssid));
                         memcpy(cfg.ap.ssid, s, len);
@@ -566,7 +572,7 @@ STATIC mp_obj_t esp_config(size_t n_args, const mp_obj_t *args, mp_map_t *kwargs
                     }
                     case QS(MP_QSTR_password): {
                         req_if = WIFI_IF_AP;
-                        mp_uint_t len;
+                        size_t len;
                         const char *s = mp_obj_str_get_data(kwargs->table[i].value, &len);
                         len = MIN(len, sizeof(cfg.ap.password) - 1);
                         memcpy(cfg.ap.password, s, len);

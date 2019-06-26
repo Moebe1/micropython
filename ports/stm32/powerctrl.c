@@ -30,6 +30,60 @@
 #include "rtc.h"
 #include "genhdr/pllfreqtable.h"
 
+#if defined(STM32H7)
+#define RCC_SR          RSR
+#define RCC_SR_SFTRSTF  RCC_RSR_SFTRSTF
+#define RCC_SR_RMVF     RCC_RSR_RMVF
+#else
+#define RCC_SR          CSR
+#define RCC_SR_SFTRSTF  RCC_CSR_SFTRSTF
+#define RCC_SR_RMVF     RCC_CSR_RMVF
+#endif
+
+// Location in RAM of bootloader state (just after the top of the stack)
+extern uint32_t _estack[];
+#define BL_STATE ((uint32_t*)&_estack)
+
+NORETURN void powerctrl_mcu_reset(void) {
+    BL_STATE[1] = 1; // invalidate bootloader address
+    #if __DCACHE_PRESENT == 1
+    SCB_CleanDCache();
+    #endif
+    NVIC_SystemReset();
+}
+
+NORETURN void powerctrl_enter_bootloader(uint32_t r0, uint32_t bl_addr) {
+    BL_STATE[0] = r0;
+    BL_STATE[1] = bl_addr;
+    #if __DCACHE_PRESENT == 1
+    SCB_CleanDCache();
+    #endif
+    NVIC_SystemReset();
+}
+
+static __attribute__((naked)) void branch_to_bootloader(uint32_t r0, uint32_t bl_addr) {
+    __asm volatile (
+        "ldr r2, [r1, #0]\n"    // get address of stack pointer
+        "msr msp, r2\n"         // get stack pointer
+        "ldr r2, [r1, #4]\n"    // get address of destination
+        "bx r2\n"               // branch to bootloader
+    );
+}
+
+void powerctrl_check_enter_bootloader(void) {
+    uint32_t bl_addr = BL_STATE[1];
+    BL_STATE[1] = 1; // invalidate bootloader address
+    if ((bl_addr & 0xfff) == 0 && (RCC->RCC_SR & RCC_SR_SFTRSTF)) {
+        // Reset by NVIC_SystemReset with bootloader data set -> branch to bootloader
+        RCC->RCC_SR = RCC_SR_RMVF;
+        #if defined(STM32F0) || defined(STM32F4) || defined(STM32L4)
+        __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
+        #endif
+        uint32_t r0 = BL_STATE[0];
+        branch_to_bootloader(r0, bl_addr);
+    }
+}
+
 #if !defined(STM32F0)
 
 // Assumes that PLL is used as the SYSCLK source
@@ -54,8 +108,6 @@ int powerctrl_rcc_clock_config_pll(RCC_ClkInitTypeDef *rcc_init, uint32_t sysclk
             }
         }
         RCC->DCKCFGR2 |= RCC_DCKCFGR2_CK48MSEL;
-    } else {
-        RCC->DCKCFGR2 &= ~RCC_DCKCFGR2_CK48MSEL;
     }
 
     // If possible, scale down the internal voltage regulator to save power
@@ -138,7 +190,7 @@ int powerctrl_set_sysclk(uint32_t sysclk, uint32_t ahb, uint32_t apb1, uint32_t 
     }
 
     // Default PLL parameters that give 48MHz on PLL48CK
-    uint32_t m = HSE_VALUE / 1000000, n = 336, p = 2, q = 7;
+    uint32_t m = MICROPY_HW_CLK_VALUE / 1000000, n = 336, p = 2, q = 7;
     uint32_t sysclk_source;
     bool need_pllsai = false;
 
@@ -159,7 +211,7 @@ int powerctrl_set_sysclk(uint32_t sysclk, uint32_t ahb, uint32_t apb1, uint32_t 
                 // use PLL
                 sysclk_source = RCC_SYSCLKSOURCE_PLLCLK;
                 uint32_t vco_out = sys * p;
-                n = vco_out * m / (HSE_VALUE / 1000000);
+                n = vco_out * m / (MICROPY_HW_CLK_VALUE / 1000000);
                 q = vco_out / 48;
                 #if defined(STM32F7)
                 need_pllsai = vco_out % 48 != 0;
@@ -180,7 +232,11 @@ set_clk:
     if (sysclk_source == RCC_SYSCLKSOURCE_PLLCLK) {
         // Set HSE as system clock source to allow modification of the PLL configuration
         // We then change to PLL after re-configuring PLL
+        #if MICROPY_HW_CLK_USE_HSI
+        RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+        #else
         RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSE;
+        #endif
     } else {
         // Directly set the system clock source as desired
         RCC_ClkInitStruct.SYSCLKSource = sysclk_source;
@@ -208,6 +264,8 @@ set_clk:
     }
 
     #if defined(STM32F7)
+    // Deselect PLLSAI as 48MHz source if we were using it
+    RCC->DCKCFGR2 &= ~RCC_DCKCFGR2_CK48MSEL;
     // Turn PLLSAI off because we are changing PLLM (which drives PLLSAI)
     RCC->CR &= ~RCC_CR_PLLSAION;
     #endif
@@ -215,10 +273,12 @@ set_clk:
     // Re-configure PLL
     // Even if we don't use the PLL for the system clock, we still need it for USB, RNG and SDIO
     RCC_OscInitTypeDef RCC_OscInitStruct;
-    RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-    RCC_OscInitStruct.HSEState = MICROPY_HW_CLK_HSE_STATE;
+    RCC_OscInitStruct.OscillatorType = MICROPY_HW_RCC_OSCILLATOR_TYPE;
+    RCC_OscInitStruct.HSEState = MICROPY_HW_RCC_HSE_STATE;
+    RCC_OscInitStruct.HSIState = MICROPY_HW_RCC_HSI_STATE;
+    RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
     RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-    RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+    RCC_OscInitStruct.PLL.PLLSource = MICROPY_HW_RCC_PLL_SRC;
     RCC_OscInitStruct.PLL.PLLM = m;
     RCC_OscInitStruct.PLL.PLLN = n;
     RCC_OscInitStruct.PLL.PLLP = p;
@@ -297,9 +357,12 @@ void powerctrl_enter_stop_mode(void) {
     #else
 
     #if !defined(STM32L4)
-    // enable HSE
-    __HAL_RCC_HSE_CONFIG(MICROPY_HW_CLK_HSE_STATE);
-    while (!__HAL_RCC_GET_FLAG(RCC_FLAG_HSERDY)) {
+    // enable clock
+    __HAL_RCC_HSE_CONFIG(MICROPY_HW_RCC_HSE_STATE);
+    #if MICROPY_HW_CLK_USE_HSI
+    __HAL_RCC_HSI_ENABLE();
+    #endif
+    while (!__HAL_RCC_GET_FLAG(MICROPY_HW_RCC_FLAG_HSxRDY)) {
     }
     #endif
 
@@ -386,6 +449,12 @@ void powerctrl_enter_standby_mode(void) {
 
     // enable previously-enabled RTC interrupts
     RTC->CR |= save_irq_bits;
+
+    #if defined(STM32F7)
+    // Enable the internal (eg RTC) wakeup sources
+    // See Errata 2.2.2 "Wakeup from Standby mode when the back-up SRAM regulator is enabled"
+    PWR->CSR1 |= PWR_CSR1_EIWUP;
+    #endif
 
     // enter standby mode
     HAL_PWR_EnterSTANDBYMode();

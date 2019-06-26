@@ -28,15 +28,16 @@
 #include "py/mphal.h"
 #include "py/mperrno.h"
 #include "lib/netutils/netutils.h"
-#include "lwip/etharp.h"
-#include "lwip/dns.h"
-#include "lwip/dhcp.h"
-#include "netif/ethernet.h"
 #include "pin_static_af.h"
 #include "modnetwork.h"
 #include "eth.h"
 
 #if defined(MICROPY_HW_ETH_MDC)
+
+#include "lwip/etharp.h"
+#include "lwip/dns.h"
+#include "lwip/dhcp.h"
+#include "netif/ethernet.h"
 
 // ETH PHY register definitions (for LAN8742)
 
@@ -106,7 +107,6 @@ typedef struct _eth_dma_t {
 } eth_dma_t;
 
 typedef struct _eth_t {
-    mod_network_nic_type_t base;
     uint32_t trace_flags;
     struct netif netif;
     struct dhcp dhcp_struct;

@@ -180,7 +180,7 @@ soft_reset:
 
     if (!safeboot) {
         // run boot.py
-        int ret = pyexec_file("boot.py");
+        int ret = pyexec_file_if_exists("boot.py");
         if (ret & PYEXEC_FORCED_EXIT) {
             goto soft_reset_exit;
         }
@@ -205,7 +205,7 @@ soft_reset:
             } else {
                 main_py = mp_obj_str_get_str(MP_STATE_PORT(machine_config_main));
             }
-            int ret = pyexec_file(main_py);
+            int ret = pyexec_file_if_exists(main_py);
             if (ret & PYEXEC_FORCED_EXIT) {
                 goto soft_reset_exit;
             }
@@ -307,7 +307,7 @@ STATIC void mptask_init_sflash_filesystem (void) {
     FRESULT res = f_mount(&vfs_fat->fatfs);
     if (res == FR_NO_FILESYSTEM) {
         // no filesystem, so create a fresh one
-        uint8_t working_buf[_MAX_SS];
+        uint8_t working_buf[FF_MAX_SS];
         res = f_mkfs(&vfs_fat->fatfs, FM_FAT | FM_SFD, 0, working_buf, sizeof(working_buf));
         if (res == FR_OK) {
             // success creating fresh LFS
